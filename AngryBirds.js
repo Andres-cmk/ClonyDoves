@@ -1,9 +1,47 @@
 const { Bodies, Engine, World, Events, Body,
   Mouse, MouseConstraint, Constraint } = Matter;
 
-let engine, world, ground,
-  boxes=[], bird, pigs = [], slingshot,
-  bgImg, boxImg, birdImages = [], pigImg;
+//matters
+let engine, world;
+
+
+// worlds
+let ground; 
+let bgImg;
+
+// structure
+let boxes = [];
+let boxImg;
+
+
+// pigs
+let pigs = [];
+let pigImg;
+
+// birds
+let bird;
+let birdImages = []
+
+
+// Slingshot
+let slingshot;
+let imgSlingshot;
+let audioStreched;
+
+
+function preload(){
+    bgImg = loadImage("./images/background.jpg");
+    boxImg = loadImage("./images/box.png");
+    pigImg = loadImage("./images/pig.png");
+    imgSlingshot = loadImage("./images/Slingshot_Classic.png");
+    audioStreched = createAudio("./audios/slingshot_streched.wav");
+    birdImages = [
+    loadImage("./images/red.png"),
+    loadImage("./images/chuck.png"),
+    loadImage("./images/bomb.png")
+  ]
+}
+
 
 function setup() {
   const canvas = createCanvas(800, 560);
@@ -18,17 +56,10 @@ function setup() {
     mouse: mouse,
     collisionFilter: {mask: 2}
   });
+
   World.add(world, mc);
   
-  bgImg = loadImage("background.jpg");
-  boxImg = loadImage("box.png");
-  pigImg = loadImage("pig.png");
-  birdImages = [
-    loadImage("red.png"),
-    loadImage("chuck.png"),
-    loadImage("bomb.png")
-  ]
-  
+
   ground = new Ground(width/2, height-10,
     width, 20);
   
@@ -49,7 +80,7 @@ function setup() {
   pigs.push(pig);
   
   bird = new Bird(150, 450, 25, birdImages[0]);
-  slingshot = new Slingshot(bird);
+  slingshot = new Slingshot(bird, imgSlingshot, audioStreched);
   
   Events.on(engine, "afterUpdate", () => {
     slingshot.fly(mc);
@@ -76,6 +107,8 @@ function draw() {
   slingshot.show();
   bird.show();
 }
+
+
 
 function keyPressed(){
   if (key === " " && !slingshot.hasBird()){
