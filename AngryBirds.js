@@ -16,7 +16,9 @@ let boxImg;
 
 // pigs
 let pigs = [];
-let pigImg;
+let pigStates = [];
+let pigSounds = [];
+let pigDeathSound;
 
 // birds
 let bird;
@@ -28,18 +30,30 @@ let slingshot;
 let imgSlingshot;
 let audioStreched;
 
+// Explosion
+let explosions = [];
+let explosionImg;
+
 
 function preload(){
     bgImg = loadImage("./images/background.jpg");
     boxImg = loadImage("./images/box.png");
-    pigImg = loadImage("./images/pig.png");
+    pigStates = [
+    loadImage("./images/pig.png"),
+    loadImage("./images/pig2.png"),
+    loadImage("./images/pig3.png")
+    ];
     imgSlingshot = loadImage("./images/Slingshot_Classic.png");
     audioStreched = createAudio("./audios/slingshot_streched.wav");
     birdImages = [
     loadImage("./images/red.png"),
     loadImage("./images/chuck.png"),
     loadImage("./images/bomb.png")
-  ]
+    ];
+    explosionImg = loadImage("./images/explosion.gif");
+    pigSounds.push(createAudio("./audios/pig1.wav"));
+    pigSounds.push(createAudio("./audios/pig2.wav"));
+    pigDeathSound = createAudio("./audios/pigDeath.wav");
 }
 
 
@@ -73,10 +87,10 @@ function setup() {
   }
   
   const y = height - 50*9;
-  let pig = new Pig(600, y, 25, pigImg);
+  let pig = new Pig(600, y, 25, pigStates);
   pigs.push(pig);
   
-  pig = new Pig(700, y, 25, pigImg);
+  pig = new Pig(700, y, 25, pigStates);
   pigs.push(pig);
   
   bird = new Bird(150, 450, 25, birdImages[0]);
@@ -85,6 +99,15 @@ function setup() {
   Events.on(engine, "afterUpdate", () => {
     slingshot.fly(mc);
   });
+
+  Events.on(engine, 'collisionStart', (event) => {
+  for (let pair of event.pairs) {
+    const { bodyA, bodyB } = pair;
+
+    checkAndDamagePig(bodyA);
+    checkAndDamagePig(bodyB);
+  }
+});
 }
 
 
@@ -100,15 +123,28 @@ function draw() {
     box.show();
   }
   
-  for (const pig of pigs){
-    pig.show();
+  for (let i = pigs.length - 1; i >= 0; i--) {
+    pigs[i].show();
+
+    if (pigs[i].isDead) {
+      let pPos = pigs[i].body.position;
+      explosions.push(new Explosion(pPos.x, pPos.y, explosionImg));
+
+      World.remove(world, pigs[i].body);
+      pigs.splice(i, 1);
+    }
   }
+
+  for (let i = explosions.length - 1; i >= 0; i--) {
+    explosions[i].show();
+    if (explosions[i].isFinished()) {
+      explosions.splice(i, 1);
+    }
+}
   
   slingshot.show();
   bird.show();
 }
-
-
 
 function keyPressed(){
   if (key === " " && !slingshot.hasBird()){
@@ -119,5 +155,15 @@ function keyPressed(){
     bird = new Bird(150, 450, 25,
       birdImages[index]);
     slingshot.attach(bird);
+  }
+}
+
+function checkAndDamagePig(body) {
+  const pigFound = pigs.find(p => p.body === body);
+  
+  if (pigFound) {
+    if (body.speed > 4) {
+      pigFound.hit(body.speed * 15, pigSounds, pigDeathSound); 
+    }
   }
 }
