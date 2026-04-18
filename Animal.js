@@ -5,11 +5,12 @@ class Animal {
     this.body = Bodies.circle(x, y, r, {
       restitution: 0.6,
       collisionFilter: {
-        category: category
+        category: category,
+        group: -1 
       }
     });
     
-    Body.setMass(this.body, 10);
+    Body.setMass(this.body, 3);
     
     World.add(world, this.body);
   }

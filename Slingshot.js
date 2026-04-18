@@ -21,13 +21,18 @@ class Slingshot {
     World.add(world, this.sling);
   }
   
-  fly(mc){      
-    if (this.sling.bodyB &&
-      mc.mouse.button === -1 &&
-      this.sling.bodyB.position.x >
-      this.sling.pointA.x + 10) {
-      this.sling.bodyB.collisionFilter.category = 1;
-      this.sling.bodyB = null;
+  fly(mc) {      
+    if (this.sling.bodyB && mc.mouse.button === -1) { 
+      const d = dist(
+        this.sling.bodyB.position.x, 
+        this.sling.bodyB.position.y, 
+        this.sling.pointA.x, 
+        this.sling.pointA.y
+      );
+
+      if (d > 20) { 
+        this.sling.bodyB = null; 
+      }
     }
   }
   
