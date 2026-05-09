@@ -6,7 +6,7 @@ class Animal {
       restitution: 0.6,
       collisionFilter: {
         category: category,
-        group: -1 
+        group: -category
       }
     });
     

@@ -11,7 +11,8 @@ let bgImg;
 
 // structure
 let boxes = [];
-let boxImg;
+let boxStates = [];
+let woodStates = [];
 
 
 // pigs
@@ -41,7 +42,23 @@ let explosionImg;
 
 function preload(){
     bgImg = loadImage("./images/background.jpg");
-    boxImg = loadImage("./images/box.png");
+    
+    // Cargar los 4 estados de la caja
+    boxStates = [
+      loadImage("./images/box1.png"),
+      loadImage("./images/box2.png"),
+      loadImage("./images/box3.png"),
+      loadImage("./images/box4.png")
+    ];
+    
+    // Cargar los 4 estados de la madera
+    woodStates = [
+      loadImage("./images/wood1.png"),
+      loadImage("./images/wood2.png"),
+      loadImage("./images/wood3.png"),
+      loadImage("./images/wood4.png")
+    ];
+    
     pigStates = [
     loadImage("./images/pig.png"),
     loadImage("./images/pig2.png"),
@@ -80,17 +97,32 @@ function setup() {
   World.add(world, mc);
   
 
-  ground = new Ground(width/2, height-10,
-    width, 20);
+  ground = new Ground(width/2, height-10, width, 20);
   
-  for(let i=1; i<=8; i++){
-    const y = height - 50*i - 10;
-    let box = new Box(600, y, 50, 50, boxImg);
-    boxes.push(box);
-    
-    box = new Box(700, y, 50, 50, boxImg);
-    boxes.push(box);
-  }
+  // Muros invisibles para evitar que los cerdos (y aves) salgan del recuadro
+  let leftWall = new Ground(-10, height/2, 20, height*2);
+  let rightWall = new Ground(width + 10, height/2, 20, height*2);
+  let ceiling = new Ground(width/2, -50, width*2, 100);
+  
+  // --- CONSTRUCCIÓN DEL NIVEL ---
+  let startX = 650; 
+  let groundY = height - 20;
+
+  // Nivel 1: Base (Dos pilares verticales y un techo largo)
+  boxes.push(new Box(startX - 50, groundY - 50, 55, 55, boxStates));
+  boxes.push(new Box(startX + 50, groundY - 50, 55, 55, boxStates));
+  boxes.push(new Box(startX + 50, groundY - 95, 55, 55, boxStates));
+  boxes.push(new Box(startX - 50, groundY - 95, 55, 55, boxStates));
+  // Techo/Viga larga
+  boxes.push(new Box(startX, groundY - 110, 160, 20, woodStates));
+
+  // Nivel 2: Intermedio
+  boxes.push(new Box(startX - 40, groundY - 160, 55, 55, boxStates));
+  boxes.push(new Box(startX + 40, groundY - 160, 55, 55, boxStates));
+  boxes.push(new Box(startX, groundY - 210, 140, 20, woodStates));
+
+  // Nivel 3: Cúspide
+  boxes.push(new Box(startX, groundY - 240, 40, 40, boxStates));
 
   for (let i = 0; i < TOTAL_BIRDS; i++) {
     let xPos = 120 - (i * 60); 
@@ -111,22 +143,27 @@ function setup() {
 
   slingshot = new Slingshot(bird, imgSlingshot, audioStreched);
   
-  const yPig = height - 50*9; 
-  let pig = new Pig(600, yPig, 25, pigStates);
-  pigs.push(pig);
+  // Cerdito dentro de la base
+  let pig1 = new Pig(startX, groundY - 40, 25, pigStates);
+  pigs.push(pig1);
   
-  pig = new Pig(700, yPig, 25, pigStates);
-  pigs.push(pig);
+  // Cerdito en el segundo piso
+  let pig2 = new Pig(startX, groundY - 145, 25, pigStates);
+  pigs.push(pig2);
   
   Events.on(engine, "afterUpdate", () => {
     if (!isAnimatingBird && bird) {
       slingshot.fly(mc);
     }
 
-    if (birdLaunched === false && bird && !slingshot.hasBird()) {
+    // Añadimos !isAnimatingBird para evitar que el pájaro sea marcado como "lanzado"
+    // mientras solo está caminando hacia la resortera. Esto causaba que se borrara al llegar.
+    if (!isAnimatingBird && birdLaunched === false && bird && !slingshot.hasBird()) {
       
+      // Sacamos de la cola AL LANZAR para que las demás aves avancen en la pantalla
       if (birdQueue.includes(bird)) {
-        birdQueue.shift(); 
+        let index = birdQueue.indexOf(bird);
+        birdQueue.splice(index, 1);
       }
 
       birdLaunched = true;
@@ -138,8 +175,13 @@ function setup() {
   for (let pair of event.pairs) {
     const { bodyA, bodyB } = pair;
 
-    checkAndDamagePig(bodyA);
-    checkAndDamagePig(bodyB);
+    // Pasamos la velocidad del otro objeto para un cálculo de daño cruzado
+    checkAndDamagePig(bodyA, bodyB.speed);
+    checkAndDamagePig(bodyB, bodyA.speed);
+    
+    // Lo mismo para las cajas
+    checkAndDamageBox(bodyA, bodyB.speed);
+    checkAndDamageBox(bodyB, bodyA.speed);
   }
 });
 }
@@ -162,19 +204,25 @@ function draw() {
       bird = null; 
       birdLaunched = false;
 
-      if (birdQueue.length > 1) {
-        birdQueue.shift(); 
+      // YA NO HACEMOS SHIFT AQUÍ. El siguiente pájaro ya es el índice 0.
+      if (birdQueue.length > 0) {
         bird = birdQueue[0];
         isAnimatingBird = true; 
         Matter.Body.setStatic(bird.body, true);
-      } else {
-        birdQueue.shift(); 
       }
     }
   }
 
-  for (const box of boxes){
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    let box = boxes[i];
     box.show();
+    
+    if (box.isDead) {
+      // Opcional: añadir una pequeña explosión o efecto de polvo aquí
+      // explosions.push(new Explosion(box.body.position.x, box.body.position.y, explosionImg));
+      World.remove(world, box.body);
+      boxes.splice(i, 1);
+    }
   }
 
   for (let i = 0; i < birdQueue.length; i++) {
@@ -246,12 +294,26 @@ function keyPressed() {
   }
 }
 
-function checkAndDamagePig(body) {
+function checkAndDamagePig(body, impactSpeed) {
   const pigFound = pigs.find(p => p.body === body);
   
   if (pigFound) {
-    if (body.speed > 4) {
-      pigFound.hit(body.speed * 15, pigSounds, pigDeathSound); 
+    let speed = impactSpeed || body.speed;
+    if (speed > 3) {
+      pigFound.hit(speed * 8, pigSounds, pigDeathSound); 
+    }
+  }
+}
+
+function checkAndDamageBox(body, impactSpeed) {
+  const boxFound = boxes.find(b => b.body === body);
+  
+  if (boxFound) {
+    let speed = impactSpeed || body.speed;
+    // Solo aplicamos daño si la velocidad del impacto es considerable
+    // para evitar que se rompan por simplemente acomodarse por la gravedad
+    if (speed > 5) { 
+      boxFound.hit(speed * 5); // Multiplicador de daño para la madera
     }
   }
 }
