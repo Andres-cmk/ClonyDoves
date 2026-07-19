@@ -70,11 +70,11 @@ libraries/          p5.js y matter.js vendorizados
   <img src="images/matilda.png" alt="Matilda" width="80">
 </p>
 
-- **Red**: dispara una onda que empuja y daña todo en la dirección en la que va volando.
+- **Red**: dispara una onda que empuja y daña todo en la dirección en la que va volando. <img src="images/red_shockwave.png" alt="Onda de Red" height="30" align="absmiddle">
 - **Chuck**: acelera de golpe y aplana su trayectoria casi en línea recta.
-- **Bomb**: estalla en el acto, dañando y empujando todo lo que tenga cerca.
+- **Bomb**: estalla en el acto, dañando y empujando todo lo que tenga cerca. <img src="images/explosion.gif" alt="Explosión de Bomb" height="30" align="absmiddle">
 - **OldTerence**: sin poder activable, pero pega más duro por ser más pesada que el resto.
-- **Matilda**: suelta un huevo explosivo que detona al tocar el suelo o chocar contra la estructura.
+- **Matilda**: suelta un huevo explosivo que detona al tocar el suelo o chocar contra la estructura. <img src="images/matilda_egg.png" alt="Huevo de Matilda" height="30" align="absmiddle">
 
 ### Medallas
 
