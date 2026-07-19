@@ -47,9 +47,17 @@ let pigSounds = [];
 let pigDeathSound;
 
 // birds
+// "bird" es siempre el ave que está caminando hacia la resortera o ya
+// enganchada en ella (apuntando); "projectile" es el ave que ya salió
+// disparada y todavía está en el aire, rastreada aparte para poder
+// eliminarla por tiempo/asentamiento SIN afectar a "bird" -así el
+// jugador puede elegir/cambiar la siguiente ave mientras la anterior
+// todavía está volando-.
 let birdLaunched = false;
 let launchTime;
-const TIME_TO_WAIT = 5000; 
+let projectile = null;
+const TIME_TO_WAIT = 8000;
+const SETTLE_GRACE = 2500; // antes 1000: desaparecía casi al instante de frenarse
 let birdImages = []
 let birdQueue = [];
 const TOTAL_BIRDS = 5; // una de cada tipo: red, chuck, bomb, OldTerence, matilda
@@ -78,10 +86,27 @@ let score = 0;
 const POINTS_PER_BOX = 50;
 const POINTS_PER_PIG = 200;
 
+// Medallas otorgadas al ganar (todos los cerdos muertos), según el
+// puntaje final. Máximo posible en este nivel: 9 cajas*50 + 2 cerdos*200
+// = 850, de ahí salen los umbrales.
+let medalEasyImg, medalMediumImg, medalHardImg;
+const MEDAL_HARD_SCORE = 600;
+const MEDAL_MEDIUM_SCORE = 350;
+
+function getMedalForScore(s) {
+  if (s >= MEDAL_HARD_SCORE) return medalHardImg;
+  if (s >= MEDAL_MEDIUM_SCORE) return medalMediumImg;
+  return medalEasyImg;
+}
+
 // Menú inicial: el juego arranca en "menu" y pasa a "playing" al
 // presionar el botón. La física ya está armada desde setup(), pero no
 // se actualiza (Engine.update) ni se dibuja hasta empezar a jugar.
 let gameState = "menu";
+// "win" (murieron todos los cerdos) o "lose" (se acabaron las aves con
+// cerdos vivos todavía) - define qué se muestra en la pantalla de
+// fin de ronda.
+let roundResult = null;
 let startButton = { x: 0, y: 0, w: 0, h: 0 };
 let pauseButton = { x: 0, y: 0, w: 0, h: 0 };
 let resumeButton = { x: 0, y: 0, w: 0, h: 0 };
@@ -115,6 +140,9 @@ function preload(){
     ];
     imgSlingshot = loadImage("./images/Slingshot_Classic.png");
     audioStreched = createAudio("./audios/slingshot_streched.wav");
+    medalEasyImg = loadImage("./images/medal_easy.png");
+    medalMediumImg = loadImage("./images/medal_medium.png");
+    medalHardImg = loadImage("./images/medal_hard.png");
     birdImages = [
     loadImage("./images/red.png"),
     loadImage("./images/chuck.png"),
@@ -164,15 +192,28 @@ function setup() {
     // Añadimos !isAnimatingBird para evitar que el pájaro sea marcado como "lanzado"
     // mientras solo está caminando hacia la resortera. Esto causaba que se borrara al llegar.
     if (!isAnimatingBird && birdLaunched === false && bird && !slingshot.hasBird()) {
-      
+
       // Sacamos de la cola AL LANZAR para que las demás aves avancen en la pantalla
       if (birdQueue.includes(bird)) {
         let index = birdQueue.indexOf(bird);
         birdQueue.splice(index, 1);
       }
 
+      // El ave recién lanzada pasa a rastrearse como "projectile"
+      // (para el timeout/asentamiento), y la siguiente de la cola
+      // arranca a caminar hacia la resortera DE INMEDIATO, en paralelo
+      // -no hace falta esperar a que la anterior termine de volar-.
+      projectile = bird;
       birdLaunched = true;
       launchTime = millis();
+
+      if (birdQueue.length > 0) {
+        bird = birdQueue[0];
+        isAnimatingBird = true;
+        Matter.Body.setStatic(bird.body, true);
+      } else {
+        bird = null;
+      }
     }
   });
 
@@ -230,22 +271,25 @@ function buildLevel() {
     // Espaciado más angosto que antes: con 5 aves en cola, 60px por ave
     // sacaba a las últimas fuera del borde izquierdo de la pantalla.
     let xPos = 170 - (i * 35);
-    let yPos = groundY - 25; // tocando el suelo, antes flotaban ~10px arriba
+    // Mismo punto exacto donde toca el suelo la resortera (su madera
+    // llega hasta "groundY"; con radio 25, el borde inferior del ave
+    // queda justo ahí, ni más arriba ni más abajo).
+    let yPos = groundY - 25;
 
     let img = birdImages[i % birdImages.length];
     let b = new Bird(xPos, yPos, 25, img);
 
-    if (i > 0) {
-      Matter.Body.setStatic(b.body, true);
-    }
+    // TODAS las aves arrancan estáticas y en su lugar de la fila,
+    // incluida la primera: camina hacia la resortera como cualquier
+    // otra (ver isAnimatingBird más abajo), sin trato especial.
+    Matter.Body.setStatic(b.body, true);
     birdQueue.push(b);
   }
 
   bird = birdQueue[0];
-  Matter.Body.setPosition(bird.body, { x: targetPos.x, y: targetPos.y });
-  Matter.Body.setStatic(bird.body, false);
+  isAnimatingBird = true;
 
-  slingshot = new Slingshot(bird, imgSlingshot, audioStreched);
+  slingshot = new Slingshot(targetPos, bird.body, imgSlingshot, audioStreched);
 
   // Cerdito dentro de la base
   let pig1 = new Pig(startX, groundY - 40, 25, pigStates);
@@ -269,9 +313,11 @@ function resetLevel() {
   birdQueue = [];
   explosions = [];
   bird = null;
+  projectile = null;
   birdLaunched = false;
   isAnimatingBird = false;
   score = 0;
+  roundResult = null;
 
   buildLevel();
 }
@@ -314,27 +360,17 @@ function draw() {
 
   ground.show();
 
-  if (isPlaying && birdLaunched && bird) {
+  // Limpieza del ave que ya voló (projectile), independiente de "bird"
+  // (que ya avanzó a la siguiente desde que se lanzó ésta).
+  if (isPlaying && birdLaunched && projectile) {
     let currentTime = millis();
-    let speed = bird.body.speed;
+    let speed = projectile.body.speed;
 
-    if (currentTime - launchTime > TIME_TO_WAIT || (speed < 0.2 && currentTime - launchTime > 1000)) {
-      World.remove(world, bird.body);
-      bird = null;
+    if (currentTime - launchTime > TIME_TO_WAIT || (speed < 0.2 && currentTime - launchTime > SETTLE_GRACE)) {
+      World.remove(world, projectile.body);
+      projectile = null;
       birdLaunched = false;
-
-      // YA NO HACEMOS SHIFT AQUÍ. El siguiente pájaro ya es el índice 0.
-      if (birdQueue.length > 0) {
-        bird = birdQueue[0];
-        isAnimatingBird = true;
-        Matter.Body.setStatic(bird.body, true);
-      }
     }
-  }
-
-  // Se acabaron las aves: no hay una activa ni quedan en cola
-  if (isPlaying && bird === null && birdQueue.length === 0) {
-    gameState = "roundOver";
   }
 
   for (let i = boxes.length - 1; i >= 0; i--) {
@@ -360,7 +396,7 @@ function draw() {
 
     if (isPlaying) {
       let targetX = 170 - (i * 35);
-      let targetY = groundY - 25;
+      let targetY = groundY - 25; // mismo punto donde toca el suelo la resortera
 
       let currentPos = b.body.position;
       let nextX = lerp(currentPos.x, targetX, 0.1);
@@ -379,6 +415,10 @@ function draw() {
 
   if (bird) {
     bird.show();
+  }
+
+  if (projectile) {
+    projectile.show();
   }
 
   if (isPlaying && isAnimatingBird && bird) {
@@ -405,6 +445,20 @@ function draw() {
       World.remove(world, pigs[i].body);
       pigs.splice(i, 1);
     }
+  }
+
+  // Victoria: todos los cerdos murieron, sin importar cuántas aves
+  // queden (incluso si el último tiro todavía está en el aire). Derrota:
+  // no queda ave por lanzar, ninguna en cola, Y el último proyectil ya
+  // terminó de volar -se espera a que se resuelva por si todavía llega
+  // a matar al último cerdo-. Se revisa acá, después de remover los
+  // cerdos muertos de este mismo frame, para que el conteo sea exacto.
+  if (isPlaying && pigs.length === 0) {
+    roundResult = "win";
+    gameState = "roundOver";
+  } else if (isPlaying && bird === null && birdQueue.length === 0 && !projectile) {
+    roundResult = "lose";
+    gameState = "roundOver";
   }
 
   // El timer de la explosión avanza dentro de su propio show(), así que
@@ -506,6 +560,17 @@ function isMouseOver(btn) {
          mouseY > btn.y && mouseY < btn.y + btn.h;
 }
 
+// mouseX/mouseY de p5 están en coordenadas reales de pantalla; los
+// cuerpos físicos (aves, cajas, etc.) viven en el espacio lógico
+// GAME_WIDTH x GAME_HEIGHT. Convierte de uno a otro (inverso de la
+// transformación que ya se aplica en draw() con translate/scale).
+function screenToLogical(x, y) {
+  return {
+    x: (x - viewOffsetX) / viewScaleX,
+    y: (y - viewOffsetY) / viewScaleY,
+  };
+}
+
 function layoutButton(btn, cx, cy, w, h) {
   btn.w = w;
   btn.h = h;
@@ -580,14 +645,27 @@ function drawPauseButton() {
   pop();
 }
 
-// Panel compartido: fondo oscurecido + título + una columna de botones.
-// Usado tanto por la pantalla de pausa como por la de fin de ronda.
-function drawOverlayPanel(title, buttons) {
+// Panel compartido: fondo oscurecido + (opcional) medalla + título +
+// una columna de botones. Usado tanto por la pantalla de pausa como
+// por la de fin de ronda.
+function drawOverlayPanel(title, buttons, medalImg) {
   push();
   noStroke();
   fill(0, 0, 0, 150);
   rect(0, 0, width, height);
   pop();
+
+  let titleY = height * 0.28;
+
+  if (medalImg) {
+    const medalW = min(width, height) * 0.24;
+    const medalH = medalW * (medalImg.height / medalImg.width);
+    push();
+    imageMode(CENTER);
+    image(medalImg, width / 2, height * 0.24, medalW, medalH);
+    pop();
+    titleY = height * 0.46;
+  }
 
   push();
   textAlign(CENTER, CENTER);
@@ -595,15 +673,16 @@ function drawOverlayPanel(title, buttons) {
   fill(255);
   stroke(60, 30, 10);
   strokeWeight(4);
-  textSize(min(width, height) * 0.07);
-  text(title, width / 2, height * 0.28);
+  textSize(min(width, height) * (medalImg ? 0.055 : 0.07));
+  text(title, width / 2, titleY);
   pop();
 
   const btnW = min(width, height) * 0.26;
   const btnH = btnW * 0.3;
   const gap = btnH * 0.5;
   const totalH = buttons.length * btnH + (buttons.length - 1) * gap;
-  const firstCy = height / 2 - totalH / 2 + btnH / 2;
+  const centerY = medalImg ? height * 0.68 : height / 2;
+  const firstCy = centerY - totalH / 2 + btnH / 2;
 
   buttons.forEach((b, i) => {
     layoutButton(b.rect, width / 2, firstCy + i * (btnH + gap), btnW, btnH);
@@ -620,10 +699,17 @@ function drawPauseOverlay() {
 }
 
 function drawRoundOverOverlay() {
-  drawOverlayPanel(`¡Sin aves! Puntaje: ${score}`, [
+  const buttons = [
     { rect: retryButton, label: "Reintentar" },
     { rect: menuButton, label: "Menú Principal" },
-  ]);
+  ];
+
+  if (roundResult === "win") {
+    const medal = getMedalForScore(score);
+    drawOverlayPanel(`¡Nivel superado! Puntaje: ${score}`, buttons, medal);
+  } else {
+    drawOverlayPanel(`¡Sin aves! Puntaje: ${score}`, buttons);
+  }
 }
 
 function mousePressed() {
@@ -637,6 +723,47 @@ function mousePressed() {
   if (gameState === "playing") {
     if (isMouseOver(pauseButton)) {
       gameState = "paused";
+      return;
+    }
+
+    // Elegir qué ave lanzar: se puede en cualquier momento -incluso
+    // mientras la anterior sigue en el aire (projectile), o mientras
+    // la actual ya está enganchada pero todavía en reposo-, excepto
+    // mientras se la está apuntando/estirando de verdad.
+    if (!slingshot.isAiming()) {
+      const logical = screenToLogical(mouseX, mouseY);
+
+      for (const b of birdQueue) {
+        if (b === bird) continue;
+
+        if (dist(logical.x, logical.y, b.body.position.x, b.body.position.y) < 25) {
+          // Si la que se reemplaza ya estaba enganchada a la resortera
+          // (en reposo), hay que soltarla del constraint y volverla
+          // estática, o quedaría cayendo por gravedad mientras el loop
+          // de la cola intenta reacomodarla en su lugar.
+          if (bird && slingshot.hasBird()) {
+            slingshot.detach();
+            Matter.Body.setStatic(bird.body, true);
+
+            // La resortera está más arriba que la fila de espera: sin
+            // esto, se ve flotando ahí hasta que el desplazamiento
+            // suave de la cola la alcanza. Se fija de una la posición
+            // COMPLETA (x e y) a su lugar exacto en la fila -no solo
+            // la altura, dejando el eje X "para después"-, así no
+            // queda ninguna duda de que arranca ya en su sitio.
+            const idx = birdQueue.indexOf(bird);
+            Matter.Body.setPosition(bird.body, {
+              x: 170 - (idx * 35),
+              y: groundY - 25,
+            });
+          }
+
+          Matter.Body.setStatic(b.body, true);
+          bird = b;
+          isAnimatingBird = true;
+          break;
+        }
+      }
     }
     return;
   }

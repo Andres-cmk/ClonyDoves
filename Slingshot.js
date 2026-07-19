@@ -7,18 +7,29 @@ const RIGHT_TIP_FRACTION = { x: 0.8513, y: 0.1358 };
 
 // Slingshot
 class Slingshot {
-  constructor(bird, img, audio){
+  // "anchor" es el punto fijo de la resortera (antes se tomaba de la
+  // posición inicial de la primera ave, lo que la enganchaba de
+  // entrada sin pasar por la animación de caminata como las demás -esa
+  // asimetría era la raíz de los bugs de altura al intercambiarla-).
+  // Matter.js exige un cuerpo real para crear el constraint (no acepta
+  // bodyB: null desde el inicio), así que se le pasa "initialBody"
+  // (cualquier ave sirve, no importa cuál) y se suelta de inmediato:
+  // la resortera queda vacía y CUALQUIER ave, incluida la primera, se
+  // engancha recién al llegar caminando, vía attach().
+  constructor(anchor, initialBody, img, audio){
 
     this.sling = Constraint.create({
       pointA: {
-        x: bird.body.position.x,
-        y: bird.body.position.y
+        x: anchor.x,
+        y: anchor.y
       },
-      bodyB: bird.body,
+      bodyB: initialBody,
       length: 2,
       stiffness: 0.05,
       damping : 0.05,
     });
+
+    this.sling.bodyB = null;
 
     this.img = img;
     this.audio = audio;
@@ -114,6 +125,34 @@ class Slingshot {
   
   hasBird(){
     return this.sling.bodyB != null;
+  }
+
+  // Suelta lo que esté enganchado del constraint, sin tocar nada más.
+  // Se usa al cambiar de ave seleccionada mientras la anterior ya
+  // estaba enganchada (en reposo, sin apuntar todavía): si no se
+  // suelta acá, el constraint sigue tironeando su cuerpo (ya vuelto
+  // dinámico al engancharse) mientras el loop de la cola intenta
+  // reacomodarlo, y termina "cayéndose" a un lugar random.
+  detach() {
+    this.sling.bodyB = null;
+  }
+
+  // "Apuntando" de verdad: hay un ave enganchada Y ya se estiró más
+  // allá del punto de reposo. hasBird() solo dice que está enganchada,
+  // pero eso pasa casi al instante en que llega (incluso antes de que
+  // el jugador empiece a arrastrarla) - usar solo hasBird() bloqueaba
+  // la selección casi todo el tiempo de espera, no solo al apuntar.
+  isAiming() {
+    if (!this.sling.bodyB) return false;
+
+    const d = dist(
+      this.sling.bodyB.position.x,
+      this.sling.bodyB.position.y,
+      this.sling.pointA.x,
+      this.sling.pointA.y
+    );
+
+    return d > this.relaxThreshold;
   }
   
   attach(bird){
