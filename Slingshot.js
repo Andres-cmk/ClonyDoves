@@ -118,11 +118,14 @@ class Slingshot {
       );
 
       if (d > 20) {
+        // Ya no se puede arrastrar una vez lanzada (vuelve a su
+        // categoría normal, no draggable) - ver DRAGGABLE_CATEGORY.
+        this.sling.bodyB.collisionFilter.category = NORMAL_BIRD_CATEGORY;
         this.sling.bodyB = null;
       }
     }
   }
-  
+
   hasBird(){
     return this.sling.bodyB != null;
   }
@@ -134,6 +137,9 @@ class Slingshot {
   // dinámico al engancharse) mientras el loop de la cola intenta
   // reacomodarlo, y termina "cayéndose" a un lugar random.
   detach() {
+    if (this.sling.bodyB) {
+      this.sling.bodyB.collisionFilter.category = NORMAL_BIRD_CATEGORY;
+    }
     this.sling.bodyB = null;
   }
 
@@ -156,7 +162,14 @@ class Slingshot {
   }
   
   attach(bird){
+    // Salvaguarda: una vez lanzada, un ave nunca se debe volver a
+    // enganchar (aunque rebote y quede cerca de la resortera).
+    if (bird.launched) return;
+
     this.sling.bodyB = bird.body;
+    // Solo el ave enganchada a la resortera se puede arrastrar con el
+    // mouse (ver DRAGGABLE_CATEGORY / mc en AngryBirds.js).
+    bird.body.collisionFilter.category = DRAGGABLE_CATEGORY;
     this.wasStretched = false;
   }
 

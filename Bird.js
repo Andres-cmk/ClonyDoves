@@ -1,8 +1,14 @@
 // Bird.js
 class Bird extends Animal {
-  constructor(x, y, r, img) {
-    super(x, y, r, 2, img); 
-    this.history = [];      
+  // "type" identifica el poder especial de cada ave (ver
+  // activatePower() en AngryBirds.js): "red", "chuck", "bomb",
+  // "terence" o "matilda". "powerUsed" evita activarlo dos veces en
+  // el mismo tiro.
+  constructor(x, y, r, img, type) {
+    super(x, y, r, 2, img);
+    this.history = [];
+    this.type = type;
+    this.powerUsed = false;
   }
 
   show() {

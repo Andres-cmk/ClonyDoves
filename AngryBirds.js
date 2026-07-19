@@ -48,19 +48,124 @@ let pigDeathSound;
 
 // birds
 // "bird" es siempre el ave que está caminando hacia la resortera o ya
-// enganchada en ella (apuntando); "projectile" es el ave que ya salió
-// disparada y todavía está en el aire, rastreada aparte para poder
-// eliminarla por tiempo/asentamiento SIN afectar a "bird" -así el
-// jugador puede elegir/cambiar la siguiente ave mientras la anterior
-// todavía está volando-.
-let birdLaunched = false;
-let launchTime;
-let projectile = null;
-const TIME_TO_WAIT = 8000;
-const SETTLE_GRACE = 2500; // antes 1000: desaparecía casi al instante de frenarse
+// enganchada en ella (apuntando); "projectiles" son las aves que ya
+// salieron disparadas y siguen en pantalla, cada una con su propio
+// timer de limpieza (launchTimeMs). Es un ARREGLO -no una sola- porque
+// se puede lanzar la siguiente mientras la anterior todavía vuela; con
+// una sola variable, el nuevo lanzamiento no se registraba hasta que
+// la anterior expiraba, y su poder se activaba tarde o nunca.
+let projectiles = [];
+
+// El proyectil más reciente cuyo poder todavía puede activarse.
+// Terence se saltea (no tiene poder activo): si fue el último en
+// lanzarse, el click queda libre para seleccionar aves en la cola.
+function newestActivatableProjectile() {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    if (!p.powerUsed && p.type !== "terence") return p;
+  }
+  return null;
+}
+const TIME_TO_WAIT = 10000; // antes 8000: un poco más de tiempo en pantalla tras lanzarse
+const SETTLE_GRACE = 3500; // antes 2500: ídem, un poco más de margen al asentarse
 let birdImages = []
 let birdQueue = [];
 const TOTAL_BIRDS = 5; // una de cada tipo: red, chuck, bomb, OldTerence, matilda
+// Tipo de cada ave (mismo orden que birdImages/BIRD_TYPES), usado para
+// saber qué poder activar con la barra espaciadora en pleno vuelo.
+const BIRD_TYPES = ["red", "chuck", "bomb", "terence", "matilda"];
+
+// Categorías de colisión para que el mouse solo pueda arrastrar el ave
+// que está enganchada a la resortera (apuntando), no cualquier otra
+// cosa. Se cambia a DRAGGABLE_CATEGORY al engancharse (attach) y se
+// vuelve a NORMAL_BIRD_CATEGORY al soltarse (fly/detach).
+const NORMAL_BIRD_CATEGORY = 2;
+const DRAGGABLE_CATEGORY = 4;
+
+// Huevo de Matilda: cae por gravedad (aproximada) y explota al tocar
+// el suelo o al vencerse su tiempo, como una mini bomba.
+let eggs = [];
+let eggImg;
+
+class Egg {
+  constructor(x, y, vx, vy, img) {
+    this.x = x;
+    this.y = y;
+    this.vx = vx;
+    this.vy = vy;
+    this.img = img;
+    this.age = 0;
+    this.maxAge = 120; // ~2s a 60fps, por si nunca toca el suelo
+    this.size = 46; // más grande que antes (era 32)
+    this.radius = this.size / 2; // usado para detectar choques con la estructura
+  }
+
+  update() {
+    this.vy += 0.55; // antes 0.35: cae un poco más rápido
+    this.x += this.vx;
+    this.y += this.vy;
+    this.age++;
+  }
+
+  // Explota al tocar el suelo, al vencerse su tiempo, o al salir del
+  // área jugable (por si cae fuera de la pantalla). El choque contra
+  // cajas/cerdos se revisa aparte, en eggHitsStructure() (draw()).
+  shouldExplode(bounds) {
+    return this.y >= groundY - 10 ||
+      this.age >= this.maxAge ||
+      this.x < bounds.left - 100 || this.x > bounds.right + 100;
+  }
+
+  show() {
+    push();
+    imageMode(CENTER);
+    image(this.img, this.x, this.y, this.size, this.size);
+    pop();
+  }
+}
+
+// Efecto visual de la onda de Red: se desplaza en la dirección de
+// vuelo y va agrandándose, con un fundido de salida, hasta desaparecer.
+let shockwaves = [];
+let redShockwaveImg;
+
+class Shockwave {
+  constructor(x, y, dirX, dirY, img) {
+    this.x = x;
+    this.y = y;
+    this.dirX = dirX;
+    this.dirY = dirY;
+    this.img = img;
+    this.age = 0;
+    this.maxAge = 26; // menos de medio segundo a 60fps
+    this.baseSize = 50;
+    this.growth = 7; // cuánto se agranda por frame
+    this.speed = 9; // qué tan rápido se desplaza
+  }
+
+  update() {
+    this.x += this.dirX * this.speed;
+    this.y += this.dirY * this.speed;
+    this.age++;
+  }
+
+  isFinished() {
+    return this.age >= this.maxAge;
+  }
+
+  show() {
+    const size = this.baseSize + this.growth * this.age;
+    const alpha = map(this.age, 0, this.maxAge, 255, 0);
+
+    push();
+    translate(this.x, this.y);
+    rotate(atan2(this.dirY, this.dirX));
+    tint(255, alpha);
+    imageMode(CENTER);
+    image(this.img, 0, 0, size, size * (this.img.height / this.img.width));
+    pop();
+  }
+}
 
 
 // Slingshot
@@ -112,6 +217,8 @@ let pauseButton = { x: 0, y: 0, w: 0, h: 0 };
 let resumeButton = { x: 0, y: 0, w: 0, h: 0 };
 let retryButton = { x: 0, y: 0, w: 0, h: 0 };
 let menuButton = { x: 0, y: 0, w: 0, h: 0 };
+let medalsButton = { x: 0, y: 0, w: 0, h: 0 };
+let backButton = { x: 0, y: 0, w: 0, h: 0 };
 
 
 function preload(){
@@ -151,6 +258,8 @@ function preload(){
     loadImage("./images/matilda.png")
     ];
     explosionImg = loadImage("./images/explosion.gif");
+    eggImg = loadImage("./images/matilda_egg.png");
+    redShockwaveImg = loadImage("./images/red_shockwave.png");
     pigSounds.push(createAudio("./audios/pig1.wav"));
     pigSounds.push(createAudio("./audios/pig2.wav"));
     pigDeathSound = createAudio("./audios/pigDeath.wav");
@@ -176,7 +285,11 @@ function setup() {
   mc = MouseConstraint.create(engine, {
     mouse: mouse,
     collisionFilter: {
-      mask: 0xFFFF
+      // Solo puede agarrar/arrastrar cuerpos de esta categoría (ver
+      // DRAGGABLE_CATEGORY): antes (0xFFFF) se podía arrastrar
+      // cualquier ave, caja o cerdo con el mouse, lo cual pisaba el
+      // click para activar poderes en el ave que estaba en vuelo.
+      mask: DRAGGABLE_CATEGORY
     }
   });
 
@@ -191,7 +304,11 @@ function setup() {
 
     // Añadimos !isAnimatingBird para evitar que el pájaro sea marcado como "lanzado"
     // mientras solo está caminando hacia la resortera. Esto causaba que se borrara al llegar.
-    if (!isAnimatingBird && birdLaunched === false && bird && !slingshot.hasBird()) {
+    // OJO: acá NO se exige que el proyectil anterior haya terminado -esa
+    // condición (el viejo birdLaunched === false) hacía que un tiro
+    // rápido no se registrara hasta que el anterior expirara, y su
+    // poder se activaba tarde o nunca.
+    if (!isAnimatingBird && bird && !slingshot.hasBird()) {
 
       // Sacamos de la cola AL LANZAR para que las demás aves avancen en la pantalla
       if (birdQueue.includes(bird)) {
@@ -199,13 +316,17 @@ function setup() {
         birdQueue.splice(index, 1);
       }
 
-      // El ave recién lanzada pasa a rastrearse como "projectile"
-      // (para el timeout/asentamiento), y la siguiente de la cola
-      // arranca a caminar hacia la resortera DE INMEDIATO, en paralelo
-      // -no hace falta esperar a que la anterior termine de volar-.
-      projectile = bird;
-      birdLaunched = true;
-      launchTime = millis();
+      // El ave recién lanzada se suma a "projectiles" con su propio
+      // timer, y la siguiente de la cola arranca a caminar hacia la
+      // resortera DE INMEDIATO, en paralelo.
+      bird.launchTimeMs = millis();
+      // Salvaguarda: una vez lanzada, jamás se puede volver a enganchar
+      // ni arrastrar, sin importar dónde rebote o quede cerca (attach()
+      // la rechaza si ve este flag). Se refuerza también la categoría
+      // de colisión por si acaso, aunque fly() ya la había reseteado.
+      bird.launched = true;
+      bird.body.collisionFilter.category = NORMAL_BIRD_CATEGORY;
+      projectiles.push(bird);
 
       if (birdQueue.length > 0) {
         bird = birdQueue[0];
@@ -242,10 +363,11 @@ function buildLevel() {
 
   ground = new Ground(GAME_WIDTH/2, GAME_HEIGHT-10, GAME_WIDTH, 20);
 
-  // Muros invisibles para evitar que los cerdos (y aves) salgan del recuadro
-  let leftWall = new Ground(-10, GAME_HEIGHT/2, 20, GAME_HEIGHT*2);
-  let rightWall = new Ground(GAME_WIDTH + 10, GAME_HEIGHT/2, 20, GAME_HEIGHT*2);
-  let ceiling = new Ground(GAME_WIDTH/2, -50, GAME_WIDTH*2, 100);
+  // Ya no hay muros/techo invisibles: una trayectoria real puede sacar
+  // a un ave, cerdo o caja de la pantalla, y si la parábola/física la
+  // trae de vuelta, reaparece sola. Lo que se pierde para siempre se
+  // limpia solo con el tiempo (Box/Pig.checkLifetime, y el timeout del
+  // proyectil en draw()) - no hace falta ningún límite artificial.
 
   // --- CONSTRUCCIÓN DEL NIVEL ---
   let startX = 650;
@@ -277,7 +399,15 @@ function buildLevel() {
     let yPos = groundY - 25;
 
     let img = birdImages[i % birdImages.length];
-    let b = new Bird(xPos, yPos, 25, img);
+    let type = BIRD_TYPES[i % BIRD_TYPES.length];
+    let b = new Bird(xPos, yPos, 25, img, type);
+
+    // OldTerence no tiene poder activo: por defecto es más pesado, así
+    // que golpea más fuerte y le cuesta menos derribar lo que tiene
+    // enfrente (efecto puramente físico, vía la masa de Matter.js).
+    if (type === "terence") {
+      Matter.Body.setMass(b.body, 8);
+    }
 
     // TODAS las aves arrancan estáticas y en su lugar de la fila,
     // incluida la primera: camina hacia la resortera como cualquier
@@ -312,9 +442,10 @@ function resetLevel() {
   pigs = [];
   birdQueue = [];
   explosions = [];
+  eggs = [];
+  shockwaves = [];
   bird = null;
-  projectile = null;
-  birdLaunched = false;
+  projectiles = [];
   isAnimatingBird = false;
   score = 0;
   roundResult = null;
@@ -341,6 +472,11 @@ function draw() {
     return;
   }
 
+  if (gameState === "medals") {
+    drawMedalsScreen();
+    return;
+  }
+
   // Fondo a pantalla completa (sin bordes), fuera del espacio lógico escalado
   background(128);
   image(bgImg, 0, 0, width, height);
@@ -360,16 +496,18 @@ function draw() {
 
   ground.show();
 
-  // Limpieza del ave que ya voló (projectile), independiente de "bird"
-  // (que ya avanzó a la siguiente desde que se lanzó ésta).
-  if (isPlaying && birdLaunched && projectile) {
-    let currentTime = millis();
-    let speed = projectile.body.speed;
+  // Limpieza de las aves que ya volaron, cada una con su propio timer
+  // (pueden coexistir varias en pantalla si se lanzan rápido seguido).
+  if (isPlaying) {
+    const currentTime = millis();
+    for (let i = projectiles.length - 1; i >= 0; i--) {
+      const p = projectiles[i];
+      const elapsed = currentTime - p.launchTimeMs;
 
-    if (currentTime - launchTime > TIME_TO_WAIT || (speed < 0.2 && currentTime - launchTime > SETTLE_GRACE)) {
-      World.remove(world, projectile.body);
-      projectile = null;
-      birdLaunched = false;
+      if (elapsed > TIME_TO_WAIT || (p.body.speed < 0.2 && elapsed > SETTLE_GRACE)) {
+        World.remove(world, p.body);
+        projectiles.splice(i, 1);
+      }
     }
   }
 
@@ -417,8 +555,8 @@ function draw() {
     bird.show();
   }
 
-  if (projectile) {
-    projectile.show();
+  for (const p of projectiles) {
+    p.show();
   }
 
   if (isPlaying && isAnimatingBird && bird) {
@@ -456,9 +594,42 @@ function draw() {
   if (isPlaying && pigs.length === 0) {
     roundResult = "win";
     gameState = "roundOver";
-  } else if (isPlaying && bird === null && birdQueue.length === 0 && !projectile) {
+  } else if (isPlaying && bird === null && birdQueue.length === 0 && projectiles.length === 0 && eggs.length === 0) {
+    // Se espera también a que no queden huevos de Matilda cayendo, por
+    // si todavía llegan a matar al último cerdo.
     roundResult = "lose";
     gameState = "roundOver";
+  }
+
+  // Huevo de Matilda: cae, y explota al tocar el suelo / vencerse su
+  // tiempo / salirse del área jugable. Solo avanza mientras se juega.
+  if (isPlaying) {
+    for (let i = eggs.length - 1; i >= 0; i--) {
+      const egg = eggs[i];
+      egg.update();
+      egg.show();
+
+      if (eggHitsStructure(egg) || egg.shouldExplode(playBounds)) {
+        // Antes (100, 140) casi nunca alcanzaba para romper una caja
+        // entera (100 de vida): solo si el huevo caía casi exacto en
+        // su centro. Con más radio y fuerza, rompe bloques de verdad
+        // aunque el impacto no sea perfecto.
+        explodeAt(egg.x, egg.y, 130, 210);
+        eggs.splice(i, 1);
+      }
+    }
+  }
+
+  // Onda de Red: se desplaza y se agranda hasta desvanecerse.
+  if (isPlaying) {
+    for (let i = shockwaves.length - 1; i >= 0; i--) {
+      const sw = shockwaves[i];
+      sw.update();
+      sw.show();
+      if (sw.isFinished()) {
+        shockwaves.splice(i, 1);
+      }
+    }
   }
 
   // El timer de la explosión avanza dentro de su propio show(), así que
@@ -549,6 +720,108 @@ function drawMenu() {
     startButton.y + startButton.h + min(width, height) * 0.05
   );
   pop();
+
+  // Botón secundario, más chico, para ver la explicación de las medallas
+  medalsButton.w = startButton.w * 0.7;
+  medalsButton.h = startButton.h * 0.8;
+  medalsButton.x = width / 2 - medalsButton.w / 2;
+  medalsButton.y = startButton.y + startButton.h + min(width, height) * 0.12;
+
+  const hoveringMedals = isMouseOver(medalsButton);
+
+  push();
+  strokeWeight(2);
+  stroke(255);
+  fill(hoveringMedals ? color(255, 255, 255, 60) : color(255, 255, 255, 25));
+  rectMode(CORNER);
+  rect(medalsButton.x, medalsButton.y, medalsButton.w, medalsButton.h, 10);
+  noStroke();
+  fill(255);
+  textStyle(BOLD);
+  textAlign(CENTER, CENTER);
+  textSize(medalsButton.h * 0.4);
+  text("Medallas", width / 2, medalsButton.y + medalsButton.h / 2);
+  pop();
+}
+
+// Pantalla de explicación de medallas, accedida desde el menú
+// principal. Muestra las 3 medallas con su rango de puntaje y una
+// breve descripción de cada una.
+function drawMedalsScreen() {
+  background(20);
+  image(bgImg, 0, 0, width, height);
+
+  push();
+  noStroke();
+  fill(0, 0, 0, 150);
+  rect(0, 0, width, height);
+  pop();
+
+  push();
+  textAlign(CENTER, CENTER);
+  textStyle(BOLD);
+  fill(255);
+  stroke(60, 30, 10);
+  strokeWeight(4);
+  textSize(min(width, height) * 0.06);
+  text("Medallas", width / 2, height * 0.1);
+  pop();
+
+  const medals = [
+    {
+      img: medalEasyImg,
+      range: `0 - ${MEDAL_MEDIUM_SCORE - 1} puntos`,
+      desc: "Terminaste el nivel. Todo puntaje cuenta: cada intento suma experiencia.",
+    },
+    {
+      img: medalMediumImg,
+      range: `${MEDAL_MEDIUM_SCORE} - ${MEDAL_HARD_SCORE - 1} puntos`,
+      desc: "Buen despeje de la estructura, derribando bastante en el camino.",
+    },
+    {
+      img: medalHardImg,
+      range: `${MEDAL_HARD_SCORE}+ puntos`,
+      desc: "Dominaste el nivel por completo, aprovechando casi cada golpe.",
+    },
+  ];
+
+  const colW = width / 3;
+  const medalSize = min(width, height) * 0.2;
+  const medalCy = height * 0.42;
+
+  medals.forEach((m, i) => {
+    const cx = colW * i + colW / 2;
+    const medalH = medalSize * (m.img.height / m.img.width);
+
+    push();
+    imageMode(CENTER);
+    image(m.img, cx, medalCy, medalSize, medalH);
+    pop();
+
+    push();
+    textAlign(CENTER, CENTER);
+    textStyle(BOLD);
+    fill(255);
+    stroke(60, 30, 10);
+    strokeWeight(2);
+    textSize(min(width, height) * 0.024);
+    text(m.range, cx, medalCy + medalH / 2 + min(width, height) * 0.05);
+    pop();
+
+    push();
+    noStroke();
+    fill(255);
+    textStyle(NORMAL);
+    textAlign(CENTER, CENTER);
+    textSize(min(width, height) * 0.02);
+    text(m.desc, cx, medalCy + medalH / 2 + min(width, height) * 0.12, colW * 0.85);
+    pop();
+  });
+
+  const btnW = min(width, height) * 0.26;
+  const btnH = btnW * 0.3;
+  layoutButton(backButton, width / 2, height * 0.88, btnW, btnH);
+  drawButton(backButton, "Volver");
 }
 
 // --- Helpers de UI reutilizables para los botones de pausa/reintentar/menú ---
@@ -716,6 +989,15 @@ function mousePressed() {
   if (gameState === "menu") {
     if (isMouseOver(startButton)) {
       gameState = "playing";
+    } else if (isMouseOver(medalsButton)) {
+      gameState = "medals";
+    }
+    return;
+  }
+
+  if (gameState === "medals") {
+    if (isMouseOver(backButton)) {
+      gameState = "menu";
     }
     return;
   }
@@ -726,15 +1008,22 @@ function mousePressed() {
       return;
     }
 
-    // Elegir qué ave lanzar: se puede en cualquier momento -incluso
-    // mientras la anterior sigue en el aire (projectile), o mientras
-    // la actual ya está enganchada pero todavía en reposo-, excepto
-    // mientras se la está apuntando/estirando de verdad.
+    // Activar el poder tiene prioridad absoluta: mientras haya un ave
+    // en pleno vuelo con el poder sin usar (la más reciente, si hay
+    // varias volando), CUALQUIER click lo activa, sin importar dónde
+    // caiga. Recién si no hay nada que activar se revisa la selección
+    // de ave en la cola.
+    const activatable = newestActivatableProjectile();
+    if (activatable) {
+      activatePower(activatable);
+      return;
+    }
+
     if (!slingshot.isAiming()) {
       const logical = screenToLogical(mouseX, mouseY);
 
       for (const b of birdQueue) {
-        if (b === bird) continue;
+        if (b === bird || b.launched) continue;
 
         if (dist(logical.x, logical.y, b.body.position.x, b.body.position.y) < 25) {
           // Si la que se reemplaza ya estaba enganchada a la resortera
@@ -765,6 +1054,7 @@ function mousePressed() {
         }
       }
     }
+
     return;
   }
 
@@ -796,8 +1086,14 @@ function mousePressed() {
 function keyPressed() {
   if (gameState !== "playing") return;
 
-  if (key === " " && !slingshot.hasBird()) {
-    if (!bird && birdQueue.length > 0) {
+  // keyCode 32 como respaldo de key===" " (más confiable entre
+  // navegadores/teclados para la barra espaciadora)
+  if (key === " " || keyCode === 32) {
+    // Poder especial: el proyectil más reciente con poder sin usar
+    const activatable = newestActivatableProjectile();
+    if (activatable) {
+      activatePower(activatable);
+    } else if (!slingshot.hasBird() && !bird && birdQueue.length > 0) {
       bird = birdQueue[0];
       isAnimatingBird = true;
     }
@@ -817,13 +1113,169 @@ function checkAndDamagePig(body, impactSpeed) {
 
 function checkAndDamageBox(body, impactSpeed) {
   const boxFound = boxes.find(b => b.body === body);
-  
+
   if (boxFound) {
     let speed = impactSpeed || body.speed;
     // Solo aplicamos daño si la velocidad del impacto es considerable
     // para evitar que se rompan por simplemente acomodarse por la gravedad
-    if (speed > 5) { 
+    if (speed > 5) {
       boxFound.hit(speed * 5); // Multiplicador de daño para la madera
     }
   }
+}
+
+// --- Poderes especiales de las aves ---
+// Se activan una sola vez por tiro, con la barra espaciadora, mientras
+// el ave está en pleno vuelo (ver keyPressed()). OldTerence no tiene
+// poder activo: su ventaja (más pesado) ya se aplicó al crearla.
+
+// Empujón hacia afuera compartido por la explosión de Bomb, el huevo
+// de Matilda y la onda de Red.
+function pushAway(body, x, y, strength) {
+  const dx = body.position.x - x;
+  const dy = body.position.y - y;
+  const len = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+  Matter.Body.applyForce(body, body.position, {
+    x: (dx / len) * 0.035 * strength,
+    y: (dy / len) * 0.035 * strength,
+  });
+}
+
+// Daño de área compartido por Bomb y el huevo de Matilda: todo lo que
+// esté dentro de "radius" recibe daño (con caída lineal según
+// distancia), un empujón hacia afuera, y se agrega el efecto visual
+// de explosión que ya usábamos para cuando muere un cerdo.
+function explodeAt(x, y, radius, force) {
+  for (let i = pigs.length - 1; i >= 0; i--) {
+    const p = pigs[i];
+    const d = dist(x, y, p.body.position.x, p.body.position.y);
+    if (d < radius) {
+      const falloff = 1 - d / radius;
+      p.hit(force * falloff, pigSounds, pigDeathSound);
+      pushAway(p.body, x, y, falloff);
+    }
+  }
+
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    const b = boxes[i];
+    const d = dist(x, y, b.body.position.x, b.body.position.y);
+    if (d < radius) {
+      const falloff = 1 - d / radius;
+      b.hit(force * falloff);
+      pushAway(b.body, x, y, falloff);
+    }
+  }
+
+  explosions.push(new Explosion(x, y, explosionImg));
+}
+
+// Chuck: impulso de velocidad hacia adelante, en la dirección en la
+// que ya viene volando. Además de acelerarla mucho, se achata la
+// componente vertical -si no, por más rápido que vaya, la gravedad la
+// sigue curvando con el mismo ángulo original-, para que la trayectoria
+// se vea lo más parecida posible a una línea recta.
+function chuckBoost(b) {
+  const CHUCK_BOOST = 5; // antes 7: pegaba demasiado fuerte al impactar (el daño depende de la velocidad)
+  const FLATTEN = 0.15; // qué tanto se conserva del ángulo vertical original
+  const vel = b.body.velocity;
+  Matter.Body.setVelocity(b.body, {
+    x: vel.x * CHUCK_BOOST,
+    y: vel.y * CHUCK_BOOST * FLATTEN,
+  });
+}
+
+// Bomb: explota en su propia posición y se destruye a sí misma (como
+// en el juego real, termina el tiro de inmediato).
+function bombExplode(b) {
+  explodeAt(b.body.position.x, b.body.position.y, 150, 220);
+  World.remove(world, b.body);
+  const idx = projectiles.indexOf(b);
+  if (idx !== -1) {
+    projectiles.splice(idx, 1);
+  }
+}
+
+// Matilda: suelta un huevo que cae y explota al tocar el suelo (radio
+// más chico que la bomba: es un arma secundaria, no la propia ave).
+// Le damos un empujón inicial hacia abajo para que caiga más decidida
+// en vez de arrancar en caída libre desde velocidad cero.
+function matildaDropEgg(b) {
+  eggs.push(new Egg(b.body.position.x, b.body.position.y, b.body.velocity.x * 0.3, 4, eggImg));
+
+  // Retroceso: al soltar el huevo hacia abajo, Matilda "rebota" un
+  // poco hacia arriba, como reacción del lanzamiento.
+  const vel = b.body.velocity;
+  Matter.Body.setVelocity(b.body, { x: vel.x, y: vel.y - 6 });
+}
+
+// El huevo no es un cuerpo de Matter.js (es una simulación simple), así
+// que sin esto atravesaba la estructura de largo hasta llegar al
+// suelo. Se revisa a mano contra cajas (rectángulo) y cerdos (círculo).
+function eggHitsStructure(egg) {
+  for (const p of pigs) {
+    if (dist(egg.x, egg.y, p.body.position.x, p.body.position.y) < egg.radius + p.body.circleRadius) {
+      return true;
+    }
+  }
+
+  for (const b of boxes) {
+    const halfW = b.w / 2 + egg.radius;
+    const halfH = b.h / 2 + egg.radius;
+    if (Math.abs(egg.x - b.body.position.x) < halfW && Math.abs(egg.y - b.body.position.y) < halfH) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// Red: onda destructiva en forma de cono, extendida en la dirección de
+// vuelo actual. Es una adición propia -en el juego original Red no
+// tiene poder-, pedida explícitamente para este clon.
+function redShockwave(b) {
+  const vel = b.body.velocity;
+  const speed = max(0.1, dist(0, 0, vel.x, vel.y));
+  const dirX = vel.x / speed;
+  const dirY = vel.y / speed;
+  const RANGE = 190; // antes 160: un poco más de alcance
+  const HALF_WIDTH = 85; // antes 70: cono un poco más ancho
+  const FORCE = 260; // antes 140: con la caída lineal, apenas rompía cajas muy cerca
+  const PUSH = 0.22;
+
+  function hitIfAhead(target, isPig) {
+    const dx = target.body.position.x - b.body.position.x;
+    const dy = target.body.position.y - b.body.position.y;
+    const forward = dx * dirX + dy * dirY;
+    const lateral = abs(dx * dirY - dy * dirX);
+
+    if (forward > 0 && forward < RANGE && lateral < HALF_WIDTH) {
+      const falloff = 1 - forward / RANGE;
+      if (isPig) {
+        target.hit(FORCE * falloff, pigSounds, pigDeathSound);
+      } else {
+        target.hit(FORCE * falloff);
+      }
+      Matter.Body.applyForce(target.body, target.body.position, {
+        x: dirX * PUSH * falloff,
+        y: dirY * PUSH * falloff - 0.025,
+      });
+    }
+  }
+
+  pigs.forEach(p => hitIfAhead(p, true));
+  boxes.forEach(bx => hitIfAhead(bx, false));
+
+  shockwaves.push(new Shockwave(b.body.position.x, b.body.position.y, dirX, dirY, redShockwaveImg));
+}
+
+// Dispara el poder correspondiente al tipo de ave, una sola vez por
+// tiro (powerUsed evita reactivarlo).
+function activatePower(b) {
+  if (!b || b.powerUsed || b.type === "terence") return;
+  b.powerUsed = true;
+
+  if (b.type === "chuck") chuckBoost(b);
+  else if (b.type === "bomb") bombExplode(b);
+  else if (b.type === "matilda") matildaDropEgg(b);
+  else if (b.type === "red") redShockwave(b);
 }
