@@ -52,7 +52,7 @@ let launchTime;
 const TIME_TO_WAIT = 5000; 
 let birdImages = []
 let birdQueue = [];
-const TOTAL_BIRDS = 4;
+const TOTAL_BIRDS = 5; // una de cada tipo: red, chuck, bomb, OldTerence, matilda
 
 
 // Slingshot
@@ -118,7 +118,9 @@ function preload(){
     birdImages = [
     loadImage("./images/red.png"),
     loadImage("./images/chuck.png"),
-    loadImage("./images/bomb.png")
+    loadImage("./images/bomb.png"),
+    loadImage("./images/OldTerence.png"),
+    loadImage("./images/matilda.png")
     ];
     explosionImg = loadImage("./images/explosion.gif");
     pigSounds.push(createAudio("./audios/pig1.wav"));
@@ -225,8 +227,10 @@ function buildLevel() {
   boxes.push(new Box(startX, groundY - 240, 40, 40, boxStates));
 
   for (let i = 0; i < TOTAL_BIRDS; i++) {
-    let xPos = 120 - (i * 60);
-    let yPos = GAME_HEIGHT - 55;
+    // Espaciado más angosto que antes: con 5 aves en cola, 60px por ave
+    // sacaba a las últimas fuera del borde izquierdo de la pantalla.
+    let xPos = 170 - (i * 35);
+    let yPos = groundY - 25; // tocando el suelo, antes flotaban ~10px arriba
 
     let img = birdImages[i % birdImages.length];
     let b = new Bird(xPos, yPos, 25, img);
@@ -355,8 +359,8 @@ function draw() {
     }
 
     if (isPlaying) {
-      let targetX = 120 - (i * 60);
-      let targetY = GAME_HEIGHT - 55;
+      let targetX = 170 - (i * 35);
+      let targetY = groundY - 25;
 
       let currentPos = b.body.position;
       let nextX = lerp(currentPos.x, targetX, 0.1);
@@ -367,6 +371,11 @@ function draw() {
 
     b.show();
   }
+
+  // El forro de cuero de la resortera va DETRÁS del ave (se dibuja antes
+  // que bird.show()), mientras que las bandas y la madera de la
+  // horqueta van delante (dibujadas después, dentro de slingshot.show())
+  slingshot.showBack();
 
   if (bird) {
     bird.show();
