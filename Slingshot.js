@@ -74,10 +74,60 @@ class Slingshot {
   }
   
 
+  // Estela de puntos que muestra la trayectoria estimada del lanzamiento
+  // mientras se estira el ave hacia atrás. Es una aproximación visual
+  // (velocidad inicial proporcional al estiramiento + gravedad del
+  // mundo), no una réplica exacta del resorte de Matter.js, pero da una
+  // guía razonable de hacia dónde va a salir disparada.
+  showTrajectory() {
+    if (!this.sling.bodyB) return;
+
+    const bird = this.sling.bodyB;
+    const dx = this.sling.pointA.x - bird.position.x;
+    const dy = this.sling.pointA.y - bird.position.y;
+    const pullDistance = dist(0, 0, dx, dy);
+
+    // Evita dibujar la estela cuando el ave recién llega a la resortera
+    // y todavía está casi en reposo (sin estirar)
+    if (pullDistance < this.relaxThreshold) return;
+
+    // "t" representa pasos reales del motor de física (un Engine.update
+    // por frame, ~60/s). vx/vy están en las mismas unidades que Matter
+    // usa para body.velocity (píxeles por paso), y "gravity" es el valor
+    // real que Matter aplica cada paso (world.gravity.y * scale ≈
+    // 0.001), así que el término 0.5*gravity*t² es matemáticamente
+    // consistente con la caída real del motor, no una curva inventada.
+    const LAUNCH_POWER = 0.014;
+    const vx = dx * LAUNCH_POWER;
+    const vy = dy * LAUNCH_POWER;
+    const gravity = world.gravity.y * world.gravity.scale;
+
+    push();
+    noStroke();
+    fill(255, 255, 255, 200);
+
+    // La gravedad real de Matter es muy débil por paso (~0.001), así
+    // que su efecto solo se nota mirando varios cientos de pasos hacia
+    // adelante (varios segundos de vuelo), no unas pocas decenas.
+    const POINTS = 24;
+    const STEP = 14;
+    for (let i = 1; i <= POINTS; i++) {
+      const t = i * STEP;
+      const px = bird.position.x + vx * t;
+      const py = bird.position.y + vy * t + 0.5 * gravity * t * t;
+
+      if (py > GAME_HEIGHT || px > GAME_WIDTH || px < 0) break;
+
+      const dotSize = map(i, 1, POINTS, 7, 2);
+      ellipse(px, py, dotSize, dotSize);
+    }
+    pop();
+  }
+
   show(){
     this.playStretchAudio();
 
-    if (this.sling.bodyB){ 
+    if (this.sling.bodyB){
       push();
       stroke(48, 22, 8);
       strokeWeight(6);
@@ -86,6 +136,8 @@ class Slingshot {
         this.sling.bodyB.position.x,
         this.sling.bodyB.position.y);
       pop();
+
+      this.showTrajectory();
     }
 
 
