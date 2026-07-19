@@ -73,6 +73,11 @@ let playBounds;
 let explosions = [];
 let explosionImg;
 
+// Puntaje: suma puntos fijos por cada caja y cada cerdo destruidos
+let score = 0;
+const POINTS_PER_BOX = 50;
+const POINTS_PER_PIG = 200;
+
 // Menú inicial: el juego arranca en "menu" y pasa a "playing" al
 // presionar el botón. La física ya está armada desde setup(), pero no
 // se actualiza (Engine.update) ni se dibuja hasta empezar a jugar.
@@ -262,6 +267,7 @@ function resetLevel() {
   bird = null;
   birdLaunched = false;
   isAnimatingBird = false;
+  score = 0;
 
   buildLevel();
 }
@@ -335,6 +341,7 @@ function draw() {
     if (box.isDead) {
       // Opcional: añadir una pequeña explosión o efecto de polvo aquí
       // explosions.push(new Explosion(box.body.position.x, box.body.position.y, explosionImg));
+      score += POINTS_PER_BOX;
       World.remove(world, box.body);
       boxes.splice(i, 1);
     }
@@ -385,6 +392,7 @@ function draw() {
     if (pigs[i].isDead) {
       let pPos = pigs[i].body.position;
       explosions.push(new Explosion(pPos.x, pPos.y, explosionImg));
+      score += POINTS_PER_PIG;
       World.remove(world, pigs[i].body);
       pigs.splice(i, 1);
     }
@@ -408,7 +416,9 @@ function draw() {
 
   if (gameState === "playing") {
     drawPauseButton();
+    drawScore();
   } else if (gameState === "paused") {
+    drawScore();
     drawPauseOverlay();
   } else if (gameState === "roundOver") {
     drawRoundOverOverlay();
@@ -513,6 +523,27 @@ function drawButton(btn, label) {
 }
 
 // Botón de pausa (ícono "II"), visible en la esquina mientras se juega
+// Puntaje en pantalla, esquina superior izquierda, en coordenadas
+// reales (igual que el resto del HUD, fuera del espacio lógico escalado)
+function drawScore() {
+  push();
+  noStroke();
+  fill(0, 0, 0, 150);
+  rectMode(CORNER);
+  const boxW = min(width, height) * 0.32;
+  const boxH = min(width, height) * 0.08;
+  rect(20, 20, boxW, boxH, 8);
+
+  fill(255);
+  stroke(60, 30, 10);
+  strokeWeight(2);
+  textStyle(BOLD);
+  textAlign(LEFT, CENTER);
+  textSize(boxH * 0.45);
+  text(`Puntaje: ${score}`, 20 + boxW * 0.06, 20 + boxH / 2);
+  pop();
+}
+
 function drawPauseButton() {
   const size = min(width, height) * 0.09;
   pauseButton.w = size;
@@ -580,7 +611,7 @@ function drawPauseOverlay() {
 }
 
 function drawRoundOverOverlay() {
-  drawOverlayPanel("¡Sin aves!", [
+  drawOverlayPanel(`¡Sin aves! Puntaje: ${score}`, [
     { rect: retryButton, label: "Reintentar" },
     { rect: menuButton, label: "Menú Principal" },
   ]);
