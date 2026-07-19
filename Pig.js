@@ -2,7 +2,8 @@ class Pig extends Animal {
   constructor(x, y, r, imgArray) {
     super(x, y, r, 1, imgArray[0]); 
     this.imgArray = imgArray;
-    this.health = 255;
+    this.maxHealth = 150; // antes 255: costaba demasiados golpes matarlos
+    this.health = this.maxHealth;
     this.isDead = false;
 
     // Lifetime: momento en que salió del área jugable (null = está dentro)
@@ -53,12 +54,13 @@ hit(force, hitSounds, deathSound) {
   show() {
     if (this.isDead) return;
 
-    if (this.health > 170) {
-      this.img = this.imgArray[0]; 
-    } else if (this.health > 85) {
-      this.img = this.imgArray[1]; 
+    const healthPercent = this.health / this.maxHealth;
+    if (healthPercent > (2 / 3)) {
+      this.img = this.imgArray[0];
+    } else if (healthPercent > (1 / 3)) {
+      this.img = this.imgArray[1];
     } else {
-      this.img = this.imgArray[2]; 
+      this.img = this.imgArray[2];
     }
 
     push();
