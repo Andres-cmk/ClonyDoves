@@ -167,11 +167,59 @@ class Shockwave {
   }
 }
 
+// Texto flotante verde ("+50", "+200") que aparece encima de una caja
+// o cerdo apenas se destruye, sube un poco y se desvanece.
+class ScorePopup {
+  constructor(x, y, points) {
+    this.x = x;
+    this.y = y;
+    this.points = points;
+    this.age = 0;
+    this.maxAge = 45;
+    this.rise = 40; // cuánto sube en total durante maxAge
+  }
+
+  update() {
+    this.age++;
+  }
+
+  isFinished() {
+    return this.age >= this.maxAge;
+  }
+
+  show() {
+    const t = this.age / this.maxAge;
+    const yOffset = this.rise * t;
+    const alpha = map(this.age, this.maxAge * 0.6, this.maxAge, 255, 0, true);
+
+    push();
+    noStroke();
+    fill(70, 230, 90, alpha);
+    stroke(20, 60, 20, alpha);
+    strokeWeight(2);
+    textStyle(BOLD);
+    textAlign(CENTER, CENTER);
+    textSize(20);
+    text(`+${this.points}`, this.x, this.y - yOffset);
+    pop();
+  }
+}
+
 
 // Slingshot
 let slingshot;
 let imgSlingshot;
 let audioStreched;
+
+// Música de fondo del menú/pantallas de información (suena en "menu" y
+// "medals", se pausa al empezar a jugar)
+let menuMusic;
+
+// Silencia música y efectos (ver setAudioMuted). No pausa menuMusic
+// por sí solo -eso lo decide updateMenuMusic() según gameState-, solo
+// pone el volumen en 0, para no tener que recordar dónde debería
+// seguir sonando al reactivar el audio.
+let audioMuted = false;
 
 // Mouse de Matter.js, guardado para poder re-mapear sus coordenadas
 // cuando la ventana cambia de tamaño (ver windowResized())
@@ -186,6 +234,10 @@ let playBounds;
 let explosions = [];
 let explosionImg;
 
+// Popups de puntaje ("+50"/"+200") mostrados encima de cajas/cerdos
+// recién destruidos.
+let scorePopups = [];
+
 // Puntaje: suma puntos fijos por cada caja y cada cerdo destruidos
 let score = 0;
 const POINTS_PER_BOX = 50;
@@ -195,7 +247,7 @@ const POINTS_PER_PIG = 200;
 // puntaje final. Máximo posible en este nivel: 9 cajas*50 + 2 cerdos*200
 // = 850, de ahí salen los umbrales.
 let medalEasyImg, medalMediumImg, medalHardImg;
-const MEDAL_HARD_SCORE = 600;
+const MEDAL_HARD_SCORE = 720; // antes 600 (~71% del máximo): se conseguía demasiado fácil
 const MEDAL_MEDIUM_SCORE = 350;
 
 function getMedalForScore(s) {
@@ -212,13 +264,27 @@ let gameState = "menu";
 // cerdos vivos todavía) - define qué se muestra en la pantalla de
 // fin de ronda.
 let roundResult = null;
+// Momento (millis()) en el que murió el último cerdo. Mientras esté
+// definido, el juego sigue corriendo con normalidad -no se corta de
+// golpe- para dar tiempo a que terminen de caer/romperse cajas que ya
+// estaban en movimiento por el último tiro.
+let pendingWinAt = null;
+const WIN_DELAY_MS = 2500;
 let startButton = { x: 0, y: 0, w: 0, h: 0 };
 let pauseButton = { x: 0, y: 0, w: 0, h: 0 };
 let resumeButton = { x: 0, y: 0, w: 0, h: 0 };
 let retryButton = { x: 0, y: 0, w: 0, h: 0 };
 let menuButton = { x: 0, y: 0, w: 0, h: 0 };
 let medalsButton = { x: 0, y: 0, w: 0, h: 0 };
+let birdsShortcutButton = { x: 0, y: 0, w: 0, h: 0 };
+let menuMuteButton = { x: 0, y: 0, w: 0, h: 0 };
 let backButton = { x: 0, y: 0, w: 0, h: 0 };
+
+// Pantalla de información (menú "Medallas"): dos pestañas, medallas y
+// aves/poderes, dentro de la misma zona.
+let infoTab = "medals";
+let medalsTabButton = { x: 0, y: 0, w: 0, h: 0 };
+let birdsTabButton = { x: 0, y: 0, w: 0, h: 0 };
 
 
 function preload(){
@@ -247,6 +313,9 @@ function preload(){
     ];
     imgSlingshot = loadImage("./images/Slingshot_Classic.png");
     audioStreched = createAudio("./audios/slingshot_streched.wav");
+    menuMusic = createAudio("./audios/menu_theme.mp3");
+    menuMusic.loop();
+    menuMusic.volume(0.5);
     medalEasyImg = loadImage("./images/medal_easy.png");
     medalMediumImg = loadImage("./images/medal_medium.png");
     medalHardImg = loadImage("./images/medal_hard.png");
@@ -444,11 +513,13 @@ function resetLevel() {
   explosions = [];
   eggs = [];
   shockwaves = [];
+  scorePopups = [];
   bird = null;
   projectiles = [];
   isAnimatingBird = false;
   score = 0;
   roundResult = null;
+  pendingWinAt = null;
 
   buildLevel();
 }
@@ -467,13 +538,15 @@ function windowResized() {
 
 
 function draw() {
+  updateMenuMusic();
+
   if (gameState === "menu") {
     drawMenu();
     return;
   }
 
   if (gameState === "medals") {
-    drawMedalsScreen();
+    drawInfoScreen();
     return;
   }
 
@@ -520,6 +593,7 @@ function draw() {
       // Opcional: añadir una pequeña explosión o efecto de polvo aquí
       // explosions.push(new Explosion(box.body.position.x, box.body.position.y, explosionImg));
       score += POINTS_PER_BOX;
+      scorePopups.push(new ScorePopup(box.body.position.x, box.body.position.y, POINTS_PER_BOX));
       World.remove(world, box.body);
       boxes.splice(i, 1);
     }
@@ -580,20 +654,30 @@ function draw() {
       let pPos = pigs[i].body.position;
       explosions.push(new Explosion(pPos.x, pPos.y, explosionImg));
       score += POINTS_PER_PIG;
+      scorePopups.push(new ScorePopup(pPos.x, pPos.y, POINTS_PER_PIG));
       World.remove(world, pigs[i].body);
       pigs.splice(i, 1);
     }
   }
 
   // Victoria: todos los cerdos murieron, sin importar cuántas aves
-  // queden (incluso si el último tiro todavía está en el aire). Derrota:
-  // no queda ave por lanzar, ninguna en cola, Y el último proyectil ya
-  // terminó de volar -se espera a que se resuelva por si todavía llega
-  // a matar al último cerdo-. Se revisa acá, después de remover los
-  // cerdos muertos de este mismo frame, para que el conteo sea exacto.
+  // queden (incluso si el último tiro todavía está en el aire). No se
+  // corta al instante: se espera WIN_DELAY_MS con el juego corriendo
+  // normal, por si en esos segundos todavía se termina de romper/caer
+  // alguna caja que ya estaba en movimiento por el último tiro (así
+  // suma esos puntos antes de mostrar la pantalla de fin de ronda).
+  // Derrota: no queda ave por lanzar, ninguna en cola, Y el último
+  // proyectil ya terminó de volar -se espera a que se resuelva por si
+  // todavía llega a matar al último cerdo-. Se revisa acá, después de
+  // remover los cerdos muertos de este mismo frame, para que el conteo
+  // sea exacto.
   if (isPlaying && pigs.length === 0) {
-    roundResult = "win";
-    gameState = "roundOver";
+    if (pendingWinAt === null) {
+      pendingWinAt = millis();
+    } else if (millis() - pendingWinAt >= WIN_DELAY_MS) {
+      roundResult = "win";
+      gameState = "roundOver";
+    }
   } else if (isPlaying && bird === null && birdQueue.length === 0 && projectiles.length === 0 && eggs.length === 0) {
     // Se espera también a que no queden huevos de Matilda cayendo, por
     // si todavía llegan a matar al último cerdo.
@@ -644,6 +728,18 @@ function draw() {
     }
   }
 
+  // Popups de puntaje ("+50"/"+200"), mismo criterio que las
+  // explosiones: solo avanzan mientras se está jugando.
+  if (isPlaying) {
+    for (let i = scorePopups.length - 1; i >= 0; i--) {
+      scorePopups[i].update();
+      scorePopups[i].show();
+      if (scorePopups[i].isFinished()) {
+        scorePopups.splice(i, 1);
+      }
+    }
+  }
+
   slingshot.show();
 
   pop();
@@ -665,6 +761,56 @@ let targetPos = { x: 150, y: 400 };
 // Menú de inicio, dibujado en coordenadas reales de pantalla (no en el
 // espacio lógico escalado) para que el botón sea fácil de posicionar
 // y de detectar con mouseX/mouseY tal cual los da p5.
+// Suena en el menú y en las pantallas de medallas/aves; se pausa
+// apenas se empieza a jugar (y en pausa/fin de ronda, que ya tienen
+// su propio ambiente).
+function updateMenuMusic() {
+  if (!menuMusic) return;
+
+  const shouldPlay = gameState === "menu" || gameState === "medals";
+
+  if (shouldPlay && menuMusic.elt.paused) {
+    menuMusic.play();
+  } else if (!shouldPlay && !menuMusic.elt.paused) {
+    menuMusic.pause();
+  }
+}
+
+// Silencia/reactiva toda la música y efectos del juego. Solo toca el
+// volumen (no pausa nada): así al reactivar el audio no hay que
+// recalcular qué debería estar sonando en cada pantalla.
+function setAudioMuted(muted) {
+  audioMuted = muted;
+  if (menuMusic) menuMusic.volume(muted ? 0 : 0.5);
+  if (audioStreched) audioStreched.volume(muted ? 0 : 1);
+  pigSounds.forEach(s => s.volume(muted ? 0 : 1));
+  if (pigDeathSound) pigDeathSound.volume(muted ? 0 : 1);
+}
+
+function toggleAudioMuted() {
+  setAudioMuted(!audioMuted);
+}
+
+// Botón de silenciar/activar audio (ícono de parlante), esquina
+// superior derecha -misma posición que el botón de pausa en "playing",
+// pero solo aparece en el menú principal-.
+function drawMuteButton(btn) {
+  const hovering = isMouseOver(btn);
+
+  push();
+  strokeWeight(3);
+  stroke(60, 30, 10);
+  fill(hovering ? color(255, 190, 60) : color(230, 160, 40, 220));
+  rect(btn.x, btn.y, btn.w, btn.h, 10);
+
+  noStroke();
+  fill(60, 30, 10);
+  textAlign(CENTER, CENTER);
+  textSize(btn.h * 0.5);
+  text(audioMuted ? "🔇" : "🔊", btn.x + btn.w / 2, btn.y + btn.h / 2 + btn.h * 0.02);
+  pop();
+}
+
 function drawMenu() {
   background(20);
   image(bgImg, 0, 0, width, height);
@@ -721,33 +867,103 @@ function drawMenu() {
   );
   pop();
 
-  // Botón secundario, más chico, para ver la explicación de las medallas
-  medalsButton.w = startButton.w * 0.7;
-  medalsButton.h = startButton.h * 0.8;
-  medalsButton.x = width / 2 - medalsButton.w / 2;
-  medalsButton.y = startButton.y + startButton.h + min(width, height) * 0.12;
+  // Dos botones secundarios, más chicos, uno al lado del otro: acceso
+  // directo a la pestaña de medallas y a la de aves/poderes (sin tener
+  // que entrar y cambiar de pestaña a mano).
+  const smallW = startButton.w * 0.46;
+  const smallH = startButton.h * 0.8;
+  const smallY = startButton.y + startButton.h + min(width, height) * 0.12;
+  const gap = startButton.w * 0.08;
 
-  const hoveringMedals = isMouseOver(medalsButton);
+  medalsButton.w = smallW;
+  medalsButton.h = smallH;
+  medalsButton.x = width / 2 - gap / 2 - smallW;
+  medalsButton.y = smallY;
+
+  birdsShortcutButton.w = smallW;
+  birdsShortcutButton.h = smallH;
+  birdsShortcutButton.x = width / 2 + gap / 2;
+  birdsShortcutButton.y = smallY;
+
+  // Mismo tamaño de letra en los dos botones: se usa el menor de los
+  // dos tamaños "ajustados" (el de "Aves y Poderes", el texto más
+  // largo), así "Medallas" no se ve más grande y ninguno se sale de
+  // su botón.
+  const sharedLabelSize = min(
+    fitTextSize("Medallas", medalsButton.w * 0.94, medalsButton.h * 0.5),
+    fitTextSize("Aves y Poderes", birdsShortcutButton.w * 0.94, birdsShortcutButton.h * 0.5)
+  );
+  drawSecondaryMenuButton(medalsButton, "Medallas", sharedLabelSize);
+  drawSecondaryMenuButton(birdsShortcutButton, "Aves y Poderes", sharedLabelSize);
+
+  const muteSize = min(width, height) * 0.09;
+  menuMuteButton.w = muteSize;
+  menuMuteButton.h = muteSize;
+  menuMuteButton.x = width - muteSize - 20;
+  menuMuteButton.y = 20;
+  drawMuteButton(menuMuteButton);
+
+  drawAudioHint();
+}
+
+// Aviso chiquito y no invasivo: los navegadores bloquean el audio con
+// sonido hasta el primer toque/click en la página (política de
+// autoplay, no se puede evitar por código). Avisa de eso y desaparece
+// solo apenas la música arranca -o sea, apenas el usuario toca algo-.
+function drawAudioHint() {
+  if (!menuMusic || !menuMusic.elt.paused || audioMuted) return;
+
+  const pulse = 150 + 80 * sin(frameCount * 0.06);
+
+  push();
+  noStroke();
+  fill(255, pulse);
+  textStyle(NORMAL);
+  textAlign(CENTER, CENTER);
+  textSize(min(width, height) * 0.02);
+  text(
+    "🔊 Tocá la pantalla para activar el sonido",
+    width / 2,
+    height * 0.94
+  );
+  pop();
+}
+
+// Reduce el tamaño de letra (sin pasar de "startSize") hasta que
+// "label" entre dentro de "maxWidth" -así el texto de un botón nunca
+// se sale de sus bordes, sin importar qué tan largo sea-.
+function fitTextSize(label, maxWidth, startSize, minSize = 8) {
+  let size = startSize;
+  textSize(size);
+  while (textWidth(label) > maxWidth && size > minSize) {
+    size -= 1;
+    textSize(size);
+  }
+  return size;
+}
+
+function drawSecondaryMenuButton(btn, label, textSizePx) {
+  const hovering = isMouseOver(btn);
 
   push();
   strokeWeight(2);
   stroke(255);
-  fill(hoveringMedals ? color(255, 255, 255, 60) : color(255, 255, 255, 25));
+  fill(hovering ? color(255, 255, 255, 60) : color(255, 255, 255, 25));
   rectMode(CORNER);
-  rect(medalsButton.x, medalsButton.y, medalsButton.w, medalsButton.h, 10);
+  rect(btn.x, btn.y, btn.w, btn.h, 10);
   noStroke();
   fill(255);
   textStyle(BOLD);
   textAlign(CENTER, CENTER);
-  textSize(medalsButton.h * 0.4);
-  text("Medallas", width / 2, medalsButton.y + medalsButton.h / 2);
+  textSize(textSizePx);
+  text(label, btn.x + btn.w / 2, btn.y + btn.h / 2);
   pop();
 }
 
-// Pantalla de explicación de medallas, accedida desde el menú
-// principal. Muestra las 3 medallas con su rango de puntaje y una
-// breve descripción de cada una.
-function drawMedalsScreen() {
+// Pantalla de información, accedida desde el menú principal. Tiene dos
+// pestañas dentro de la misma zona: medallas (con su rango de puntaje)
+// y aves con la descripción de su poder (si tienen uno).
+function drawInfoScreen() {
   background(20);
   image(bgImg, 0, 0, width, height);
 
@@ -757,37 +973,86 @@ function drawMedalsScreen() {
   rect(0, 0, width, height);
   pop();
 
-  push();
-  textAlign(CENTER, CENTER);
-  textStyle(BOLD);
-  fill(255);
-  stroke(60, 30, 10);
-  strokeWeight(4);
-  textSize(min(width, height) * 0.06);
-  text("Medallas", width / 2, height * 0.1);
-  pop();
+  const tabW = min(width, height) * 0.26;
+  const tabH = tabW * 0.26;
+  layoutButton(medalsTabButton, width / 2 - tabW * 0.55, height * 0.08, tabW, tabH);
+  layoutButton(birdsTabButton, width / 2 + tabW * 0.55, height * 0.08, tabW, tabH);
+  drawTabButton(medalsTabButton, "Medallas", infoTab === "medals");
+  drawTabButton(birdsTabButton, "Aves y poderes", infoTab === "birds");
 
+  if (infoTab === "medals") {
+    drawMedalsTab();
+  } else {
+    drawBirdsTab();
+  }
+
+  const btnW = min(width, height) * 0.26;
+  const btnH = btnW * 0.3;
+  layoutButton(backButton, width / 2, height * 0.94, btnW, btnH);
+  drawButton(backButton, "Volver");
+}
+
+// Botón de pestaña: se ve resaltado si es la pestaña activa.
+function drawTabButton(btn, label, active) {
+  const hovering = isMouseOver(btn);
+
+  push();
+  strokeWeight(3);
+  stroke(60, 30, 10);
+  fill(active ? color(255, 210, 90) : (hovering ? color(255, 255, 255, 60) : color(255, 255, 255, 25)));
+  rectMode(CORNER);
+  rect(btn.x, btn.y, btn.w, btn.h, 10);
+  noStroke();
+  fill(active ? color(60, 30, 10) : color(255));
+  textStyle(BOLD);
+  textAlign(CENTER, CENTER);
+  fitTextSize(label, btn.w * 0.85, btn.h * 0.34);
+  text(label, btn.x + btn.w / 2, btn.y + btn.h / 2);
+  pop();
+}
+
+function drawMedalsTab() {
   const medals = [
     {
       img: medalEasyImg,
       range: `0 - ${MEDAL_MEDIUM_SCORE - 1} puntos`,
-      desc: "Terminaste el nivel. Todo puntaje cuenta: cada intento suma experiencia.",
+      desc: "Llegaste hasta el final y liquidaste a todos los cerdos. No hace falta destruir todo para ganar — con eso ya alcanza.",
     },
     {
       img: medalMediumImg,
       range: `${MEDAL_MEDIUM_SCORE} - ${MEDAL_HARD_SCORE - 1} puntos`,
-      desc: "Buen despeje de la estructura, derribando bastante en el camino.",
+      desc: "Desempeño sólido: no solo derribaste a los cerdos, también te llevaste puesta buena parte de la estructura en el camino.",
     },
     {
       img: medalHardImg,
       range: `${MEDAL_HARD_SCORE}+ puntos`,
-      desc: "Dominaste el nivel por completo, aprovechando casi cada golpe.",
+      desc: "La medalla de mayor prestigio: aprovechaste casi cada tiro al máximo y dejaste la estructura reducida a escombros.",
     },
   ];
 
+  push();
+  noStroke();
+  fill(230, 230, 230);
+  textStyle(NORMAL);
+  // Con ancho+alto de caja, p5 ancla (x,y) en la esquina superior
+  // izquierda de la caja -no en el centro, aunque el align sea
+  // CENTER-, así que hay que restarle la mitad del ancho a mano para
+  // que quede centrado en la pantalla.
+  textAlign(CENTER, TOP);
+  textSize(min(width, height) * 0.02);
+  const medalsIntroW = width * 0.75;
+  text(
+    "Ganás una medalla al terminar el nivel (matando a todos los cerdos); cuál te llevás depende de tu puntaje final:",
+    width / 2 - medalsIntroW / 2,
+    height * 0.18,
+    medalsIntroW,
+    min(width, height) * 0.12
+  );
+  pop();
+
   const colW = width / 3;
-  const medalSize = min(width, height) * 0.2;
-  const medalCy = height * 0.42;
+  const medalSize = min(width, height) * 0.19;
+  const medalCy = height * 0.46;
 
   medals.forEach((m, i) => {
     const cx = colW * i + colW / 2;
@@ -812,16 +1077,124 @@ function drawMedalsScreen() {
     noStroke();
     fill(255);
     textStyle(NORMAL);
-    textAlign(CENTER, CENTER);
+    textAlign(CENTER, TOP);
     textSize(min(width, height) * 0.02);
-    text(m.desc, cx, medalCy + medalH / 2 + min(width, height) * 0.12, colW * 0.85);
+    const descW = colW * 0.85;
+    text(
+      m.desc,
+      cx - descW / 2,
+      medalCy + medalH / 2 + min(width, height) * 0.12,
+      descW,
+      min(width, height) * 0.16
+    );
     pop();
   });
+}
 
-  const btnW = min(width, height) * 0.26;
-  const btnH = btnW * 0.3;
-  layoutButton(backButton, width / 2, height * 0.88, btnW, btnH);
-  drawButton(backButton, "Volver");
+// Una columna por ave: su imagen, el ícono de su poder (si tiene uno;
+// Chuck y OldTerence no, así que ese espacio queda vacío para ellas) y
+// una descripción corta de qué hace.
+function drawBirdsTab() {
+  const birdsInfo = [
+    {
+      img: birdImages[0],
+      powerImg: redShockwaveImg,
+      name: "Red",
+      desc: "Ave equilibrada, sin poder en el juego original. Acá, al activarlo en pleno vuelo (espacio o click), dispara una onda que empuja y daña todo en la dirección en la que va volando.",
+    },
+    {
+      img: birdImages[1],
+      powerImg: null,
+      name: "Chuck",
+      desc: "La más veloz del grupo. Al activar su poder, acelera de golpe y su trayectoria se aplana casi en línea recta — ideal para atravesar estructuras de lado a lado.",
+    },
+    {
+      img: birdImages[2],
+      powerImg: explosionImg,
+      name: "Bomb",
+      desc: "Una bomba con alas. Al activar su poder, estalla en el acto dañando y empujando todo lo que tenga cerca — el tiro termina ahí mismo.",
+    },
+    {
+      img: birdImages[3],
+      powerImg: null,
+      name: "OldTerence",
+      desc: "El más grande y pesado del grupo. No tiene poder para activar, pero no lo necesita: su peso extra hace que golpee más duro y derribe con más facilidad.",
+    },
+    {
+      img: birdImages[4],
+      powerImg: eggImg,
+      name: "Matilda",
+      desc: "La estratega del grupo. Al activar su poder, suelta un huevo explosivo que cae y detona al tocar el suelo o chocar contra la estructura.",
+    },
+  ];
+
+  push();
+  noStroke();
+  fill(230, 230, 230);
+  textStyle(NORMAL);
+  textAlign(CENTER, TOP);
+  textSize(min(width, height) * 0.02);
+  const birdsIntroW = width * 0.8;
+  text(
+    "Cada ave tiene su propio poder especial: activalo en pleno vuelo con la barra espaciadora o haciendo click en la pantalla.",
+    width / 2 - birdsIntroW / 2,
+    height * 0.15,
+    birdsIntroW,
+    min(width, height) * 0.1
+  );
+  pop();
+
+  const colW = width / birdsInfo.length;
+  const birdSize = min(width, height) * 0.11;
+  const birdCy = height * 0.3;
+  const powerSlotCy = birdCy + birdSize / 2 + min(width, height) * 0.11;
+  const powerSize = min(width, height) * 0.08;
+
+  birdsInfo.forEach((bInfo, i) => {
+    const cx = colW * i + colW / 2;
+
+    push();
+    imageMode(CENTER);
+    image(bInfo.img, cx, birdCy, birdSize, birdSize);
+    pop();
+
+    push();
+    textAlign(CENTER, CENTER);
+    textStyle(BOLD);
+    fill(255);
+    stroke(60, 30, 10);
+    strokeWeight(2);
+    textSize(min(width, height) * 0.02);
+    text(bInfo.name, cx, birdCy + birdSize / 2 + min(width, height) * 0.035);
+    pop();
+
+    // El espacio del ícono de poder se reserva siempre, tenga o no
+    // imagen, para que la descripción quede a la misma altura en
+    // todas las columnas.
+    if (bInfo.powerImg) {
+      const powerH = powerSize * (bInfo.powerImg.height / bInfo.powerImg.width);
+      push();
+      imageMode(CENTER);
+      image(bInfo.powerImg, cx, powerSlotCy, powerSize, powerH);
+      pop();
+    }
+
+    push();
+    noStroke();
+    fill(255);
+    textStyle(NORMAL);
+    textAlign(CENTER, TOP);
+    textSize(min(width, height) * 0.0155);
+    const birdDescW = colW * 0.9;
+    text(
+      bInfo.desc,
+      cx - birdDescW / 2,
+      powerSlotCy + powerSize / 2 + min(width, height) * 0.06,
+      birdDescW,
+      min(width, height) * 0.2
+    );
+    pop();
+  });
 }
 
 // --- Helpers de UI reutilizables para los botones de pausa/reintentar/menú ---
@@ -864,7 +1237,7 @@ function drawButton(btn, label) {
   fill(60, 30, 10);
   textStyle(BOLD);
   textAlign(CENTER, CENTER);
-  textSize(btn.h * 0.4);
+  fitTextSize(label, btn.w * 0.85, btn.h * 0.4);
   text(label, btn.x + btn.w / 2, btn.y + btn.h / 2);
   pop();
 }
@@ -990,7 +1363,13 @@ function mousePressed() {
     if (isMouseOver(startButton)) {
       gameState = "playing";
     } else if (isMouseOver(medalsButton)) {
+      infoTab = "medals";
       gameState = "medals";
+    } else if (isMouseOver(birdsShortcutButton)) {
+      infoTab = "birds";
+      gameState = "medals";
+    } else if (isMouseOver(menuMuteButton)) {
+      toggleAudioMuted();
     }
     return;
   }
@@ -998,6 +1377,10 @@ function mousePressed() {
   if (gameState === "medals") {
     if (isMouseOver(backButton)) {
       gameState = "menu";
+    } else if (isMouseOver(medalsTabButton)) {
+      infoTab = "medals";
+    } else if (isMouseOver(birdsTabButton)) {
+      infoTab = "birds";
     }
     return;
   }
