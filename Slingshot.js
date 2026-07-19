@@ -88,8 +88,14 @@ class Slingshot {
       pop();
     }
 
-  
-    image(this.img, this.sling.pointA.x - 20,
-      this.sling.pointA.y - 10, 40, 100);
+
+    // La imagen debe llegar hasta el suelo del nivel (groundY, definido
+    // en AngryBirds.js) en vez de usar una altura fija: con la resortera
+    // ubicada más arriba (pointA) que antes, una altura fija de 100 la
+    // dejaba flotando sin tocar el piso.
+    const imgW = 40;
+    const imgTopY = this.sling.pointA.y - 10;
+    const imgH = max(100, groundY - imgTopY);
+    image(this.img, this.sling.pointA.x - imgW / 2, imgTopY, imgW, imgH);
   }
 }

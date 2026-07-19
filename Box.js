@@ -12,6 +12,9 @@ class Box {
     this.health = this.maxHealth;
     this.isDead = false;
 
+    // Lifetime: momento en que salió del área jugable (null = está dentro)
+    this.offscreenSince = null;
+
     World.add(world, this.body);
   }
 
@@ -23,6 +26,29 @@ class Box {
 
     if (this.health <= 0) {
       this.isDead = true;
+    }
+  }
+
+  // Limpieza de seguridad: si el bloque queda fuera del área jugable
+  // (empujado más allá de los muros, tunneling físico, etc.) y no
+  // regresa en "graceMs", se destruye. No afecta bloques dentro del nivel.
+  checkLifetime(bounds, graceMs = 3000) {
+    if (this.isDead || this.body.isStatic) return;
+
+    const pos = this.body.position;
+    const margin = 60;
+    const outOfBounds =
+      pos.x < bounds.left - margin || pos.x > bounds.right + margin ||
+      pos.y < bounds.top - margin || pos.y > bounds.bottom + margin;
+
+    if (outOfBounds) {
+      if (this.offscreenSince === null) {
+        this.offscreenSince = millis();
+      } else if (millis() - this.offscreenSince > graceMs) {
+        this.isDead = true;
+      }
+    } else {
+      this.offscreenSince = null;
     }
   }
 
